@@ -9,10 +9,10 @@ import time
 import torch
 import numpy as np
 from dist_train.utils.shared_optim import SharedAdam as Adam
-from dist_train.workers.base import OffPolicyManager, OnPolicyManager, PPOManager
+from dist_train.workers.base import EpisodicOffPolicyManager, OffPolicyManager, OnPolicyManager, PPOManager
 
 
-class OffPolicy(OffPolicyManager):
+class EpisodicOffPolicy(EpisodicOffPolicyManager):
 
     def rollout_wrapper(self, c_ep_counter):
         st = time.time()
@@ -67,7 +67,35 @@ class OffPolicy(OffPolicyManager):
         return stats, episodes
 
 
-class HierarchicalOffPolicy(OffPolicy):
+class OffPolicy(OffPolicyManager):
+
+    def env_transitions_wrapper(self, c_step_counter, num_transitions):
+        # Collect transitions and update counter
+        self.agent_model.collect_transitions(num_transitions, skip_im_rew=True)
+        c_step_counter += num_transitions
+
+        # Add episode for training
+        self.replay_buffer.add_episode(self.agent_model.transitions_for_buffer(training=True))
+
+    def eval_wrapper(self):
+        stats = []
+        episodes = {}
+        for evi in range(self.config.get('eval_iters', 10)):
+            self.agent_model.play_episode(do_eval=self.config.get('greedy_eval', True))
+
+            ep_stats = [float(x) for x in self.agent_model.episode_summary()]
+            stats.append(ep_stats)
+
+            dump_ep = []
+            for t in self.agent_model.curr_ep:
+                dump_t = {k: np.array(v.cpu().detach()).tolist() for k, v in t.items()}
+                dump_ep.append(dump_t)
+            episodes[evi] = dump_ep
+
+        return stats, episodes
+
+
+class HierarchicalEpisodicOffPolicy(EpisodicOffPolicy):
     def __init__(self, rank, config, settings):
         super().__init__(rank, config, settings)
 

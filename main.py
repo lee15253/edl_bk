@@ -5,7 +5,11 @@
 
 if __name__ == "__main__":
     import torch.multiprocessing as mp
-    mp.set_start_method('spawn')
+    # https://github.com/pytorch/pytorch/issues/3492#issuecomment-392977006
+    try:
+        mp.set_start_method('spawn')
+    except RuntimeError:
+        pass
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 import time

@@ -5,6 +5,7 @@
 
 import torch
 import torch.nn as nn
+from base.modules.density import DensityModule
 from base.modules.intrinsic_motivation import IntrinsicMotivationModule
 
 
@@ -14,6 +15,7 @@ class BaseLearner(nn.Module):
                  gamma=0.99,
                  env_params=None,
                  im_params=None,
+                 density_params=None,
                  bootstrap_from_early_terminal=True
                  ):
         super().__init__()
@@ -23,6 +25,7 @@ class BaseLearner(nn.Module):
 
         self.env_params = env_params if env_params is not None else {}
         self.im_params = im_params
+        self.density_params = density_params
 
         self.bootstrap_from_early_terminal = bool(bootstrap_from_early_terminal)
 
@@ -43,21 +46,45 @@ class BaseLearner(nn.Module):
             self.im_nu = None
             self.im_lambda = None
             self.im_scale = None
+            self.im_kwargs = {}
+            self.im_learning_rate = None
         else:
             self.im_nu = self.im_params.get("nu", 0.01)
             self.im_lambda = self.im_params.get("lambda", 0.05)
             self.im_scale = self.im_params.get('scale', False)
             self.im_type = self.im_params.get("type", None)
+            self.im_kwargs = self.im_params.get("model_params", {})
+            self.im_learning_rate = self.im_params.get("learning_rate", None)
             self.im = self._make_im_modules()  # This method must return the intrinsic curiosity module
             assert isinstance(self.im, IntrinsicMotivationModule)
+
+        # Make density modules (does nothing if no density module is specified)
+        if self.density_params is None:
+            self.density = None
+            self.density_type = None
+            self.density_nu = None
+            self.density_lambda = None
+            self.density_scale = None
+            self.density_learning_rate = None
+            self.density_kwargs = {}
+        else:
+            self.density_nu = self.density_params.get("nu", 0.01)
+            self.density_lambda = self.density_params.get("lambda", 0.05)
+            self.density_scale = self.density_params.get('scale', False)
+            self.density_type = self.density_params.get("type", None)
+            self.density_kwargs = self.density_params.get("model_params", {})
+            self.density_learning_rate = self.density_params.get("learning_rate", None)
+            self._make_density_modules()
+            assert isinstance(self.density, DensityModule)
 
         # Create the agent, which interfaces between the environment and policy to collect rollouts
         self.agent = self._make_agent()
 
         # Things for bookkeeping
-        self._ep_summary = []    # Used to track episode statistics
-        self._compress_me = []   # Used to hold trajectories for downstream training (trajectory = list of transitions)
-        self._batched_ep = None  # Placeholder for the batched version of _compress_me
+        self._ep_summary = []       # Used to track episode statistics
+        self.ep_summary_keys = ['success']   # Description of each value stored in self._ep_summary
+        self._compress_me = []      # Holds trajectories for downstream training (trajectory = list of transitions)
+        self._batched_ep = None     # Placeholder for the batched version of _compress_me
 
     def reset(self):
         return
@@ -68,6 +95,27 @@ class BaseLearner(nn.Module):
     def load_checkpoint(self, filepath):
         checkpoint = torch.load(filepath)
         self.load_state_dict(checkpoint)
+
+    def get_optim_params(self):
+        base_params = [p[1] for p in self.named_parameters()
+                       if not (p[0].startswith('im.') or p[0].startswith('density.'))]
+        optim_dict_list = [{"params": base_params}]
+        return optim_dict_list
+
+    def get_aux_optim_params(self):
+        assert self.im is not None or self.density is not None
+        optim_dict_list = []
+        if self.im is not None:
+            im_dict = {"params": self.im.parameters()}
+            if self.im_learning_rate is not None:
+                im_dict["lr"] = self.im_learning_rate
+            optim_dict_list.append(im_dict)
+        if self.density is not None:
+            density_dict = {"params": self.density.parameters()}
+            if self.density_learning_rate is not None:
+                density_dict["lr"] = self.density_learning_rate
+            optim_dict_list.append(density_dict)
+        return optim_dict_list
 
 
     ###### MUST BE SET FOR EVERYTHING ######
@@ -88,6 +136,14 @@ class BaseLearner(nn.Module):
     def get_im_loss(self, batch):
         assert self.im is not None
         return self.im(batch)
+
+
+    ###### MUST BE SET IF USING A DENSITY MODULE ######
+    def _make_density_modules(self):
+        raise NotImplementedError
+
+    def get_density_loss(self, batch):
+        raise NotImplementedError
 
 
     ###### FOR ON-POLICY LEARNERS ######
@@ -137,10 +193,24 @@ class BaseLearner(nn.Module):
     def get_next_qs(self, batch):
         raise NotImplementedError
 
-    def get_action_qs(self, batch):
+    def get_action_qs(self, batch, **kwargs):
         raise NotImplementedError
 
     def get_policy_loss_and_actions(self, batch):  # For DDPG
+        raise NotImplementedError
+
+    def get_curr_qs(self, batch, new_actions=None, q_i=None):
+        """
+        Compute Q_i(s,a). Use new_actions to override the actions in the batch (e.g. for SAC).
+        q_i selects the index of the Q-function.
+        """
+        raise NotImplementedError
+
+    def get_next_vs(self, batch):  # For SAC; uses target network
+        raise NotImplementedError
+
+    def sample_policy_actions_and_lprobs(self, batch):  # For SAC; we need to sample new actions when updating V
+        """ Sample new actions. Returns (actions, logprobs) tuple. """
         raise NotImplementedError
 
 
@@ -157,6 +227,15 @@ class BaseLearner(nn.Module):
             reset_dict = {}
 
         self.agent.play_episode(reset_dict, do_eval, **kwargs)
+        self.relabel_episode()
+
+    def collect_transitions(self, num_transitions, reset_dict=None, do_eval=False, skip_im_rew=False):
+        self._reset_ep_stats()
+
+        if reset_dict is None:
+            reset_dict = {}
+
+        self.agent.collect_transitions(num_transitions, reset_dict, do_eval)
         self.relabel_episode()
 
     def relabel_episode(self):
@@ -179,6 +258,9 @@ class BaseLearner(nn.Module):
                 for e, s in zip(ep, surprisals):
                     e['reward'] += (self.im_nu * s.detach())
 
+    def relabel_batch(self, batch):  # for off-policy methods; we might want to recompute e.g. intrinsic reward
+        return batch
+
 
     ###### FOR LOGGING ######
     @property
@@ -200,3 +282,20 @@ class BaseLearner(nn.Module):
     ###### WILL BE OVERWRITTEN IN THE ALGORITHM DECORATOR ######
     def forward(self, mini_batch):
         raise NotImplementedError
+
+
+    ###### FORWARD PASS FOR AUXILIARY MODULES (IM, DENSITY) ######
+    def forward_aux(self, mini_batch):
+        self.train()
+
+        loss = torch.tensor(0.)
+
+        if self.im is not None:
+            loss += (self.im_lambda * self.get_im_loss(mini_batch))
+
+        if self.density is not None:
+            loss += (self.density_lambda * self.get_density_loss(mini_batch))
+
+        self.eval()
+
+        return loss

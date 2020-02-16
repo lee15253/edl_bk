@@ -47,6 +47,8 @@ def ppo_decorator(partial_agent_class):
 
             super().__init__(**kwargs)
 
+            self.ep_summary_keys += ["avg_batch_rew", "avg_v", "v_loss", "p_loss", "e_loss"]
+
         @property
         def current_horizon(self):
             mb_state = self._mini_buffer['state']
@@ -235,9 +237,6 @@ def ppo_decorator(partial_agent_class):
             p_loss = p_losses.mean()
 
             loss = v_loss + p_loss + (self.entropy_lambda * e_loss)
-
-            if self.im is not None:
-                loss += (self.im_lambda * self.get_im_loss(mini_batch))
 
             if fill_summary:
                 self.fill_summary(mini_batch['reward'].mean(), value.mean(), v_loss, p_loss, e_loss)

@@ -32,6 +32,13 @@ class BaseActor(nn.Module):
         while not self.env.is_done:
             self.step(do_eval)
 
+    def collect_transitions(self, num_transitions, reset_dict={}, do_eval=False):
+        self.episode = []
+        for _ in range(num_transitions):
+            if self.env.is_done:
+                self.env.reset(**reset_dict)
+            self.step(do_eval)
+
     def step(self, do_eval=False):
         raise NotImplementedError
 

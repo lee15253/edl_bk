@@ -36,3 +36,20 @@ add_to_learners(Learner, 'ddpg')
 
 from .off_policy import HERLearner as Learner
 add_to_learners(Learner, 'ddpg')
+
+
+####### SKILL DISCOVERY #######
+from .skill_discovery.forward_mi import ForwardMILearner as Learner
+add_to_learners(Learner, 'ppo')
+
+from .skill_discovery.reverse_mi import ReverseMILearner as Learner
+add_to_learners(Learner, 'ppo')
+
+from .skill_discovery.smm import SMMLearner as Learner
+add_to_learners(Learner, 'sac')
+
+from .skill_discovery.edl import EDLLearner as Learner
+add_to_learners(Learner, 'ppo')
+
+from .skill_discovery.edl import EDLSiblingRivalryLearner as Learner
+add_to_learners(Learner, 'ppo')

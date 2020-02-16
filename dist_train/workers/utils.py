@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: MIT
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
 
+import os
 import time
 import torch
+import pickle
 import logging
 import numpy as np
 
@@ -30,18 +32,20 @@ def create_worker_logger(worker_id, exp_dir, group_id=None):
 
 
 class ReplayBuffer:
-    def __init__(self, model, config):
+    def __init__(self, model, config, verbose_load=True):
         self.model = model
 
-        self.capacity = config['buffer_capacity']
+        if config.get('load_buffer', False):
+            self._load_buffer(config, verbose=verbose_load)
+        else:
+            self.capacity = config['buffer_capacity']
+            self.min_size = max(config['min_buffer_size'], config['batch_size'])
+            self.ep_buffer = [{}] * self.capacity
+            self._pointer = 0
+            self._looped = False
+
         self.batch_size = config['batch_size']
-        self.min_size = max(config['min_buffer_size'], config['batch_size'])
-
-        self.ep_buffer = [{}] * self.capacity
         self.opt_count = [0] * self.capacity
-
-        self._pointer = 0
-        self._looped = False
 
         self.profiler = {
             'st': time.time(),
@@ -52,6 +56,46 @@ class ReplayBuffer:
             'size': [],
             'opts': [],
         }
+
+    def save_buffer(self, path):
+        assert os.path.isdir(path), "save_buffer needs to be given an existing directory where files will be stored"
+
+        # Save buffer-related variables
+        state_dict = dict(capacity=self.capacity, min_size=self.min_size, _pointer=self._pointer, _looped=self._looped)
+        with open(os.path.join(path, "state_dict.pkl"), 'wb') as f:
+            pickle.dump(state_dict, f, pickle.HIGHEST_PROTOCOL)
+
+        # Save the contents of the buffer, with one file per key
+        keys = self.ep_buffer[0].keys()
+        ep_idxs = np.arange(self.size)
+        for k in keys:
+            values = torch.stack([self.ep_buffer[i][k] for i in ep_idxs]).detach()
+            filename = "{}.pt".format(k)
+            torch.save(values, os.path.join(path, filename))
+
+    def _load_buffer(self, config, verbose=True):
+        assert 'buffer_path' in config, "'buffer_path needs to be set when load_buffer=True"
+        state_dict_path = os.path.join(config['buffer_path'], 'state_dict.pkl')
+        with open(state_dict_path, 'rb') as f:
+            state_dict = pickle.load(f)
+        self.capacity = state_dict['capacity']
+        self.min_size = max(state_dict['min_size'], config['batch_size'])
+        self._pointer = state_dict['_pointer']
+        self._looped = state_dict['_looped']
+
+        self.ep_buffer = [{} for _ in range(self.capacity)]
+        pt_filenames = [f for f in os.listdir(config['buffer_path']) if f.endswith('.pt')]
+        for filename in pt_filenames:
+            k = filename[:-3]  # remove the ".pt" extension
+            values = torch.load(os.path.join(config['buffer_path'], filename))
+            for idx in range(self.size):
+                self.ep_buffer[idx][k] = values[idx]
+
+        if verbose:
+            print("\n\nLoaded ReplayBuffer")
+            print("  Path: {}".format(config['buffer_path']))
+            print("  Size: {}".format(self.size))
+            print("\n")
 
     def reset_profiler(self):
         self.profiler = {

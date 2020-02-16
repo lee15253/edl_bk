@@ -5,6 +5,7 @@
 
 import os
 import json
+import time
 import torch
 import numpy as np
 import torch.distributed as dist
@@ -13,7 +14,18 @@ from dist_train.workers.utils import create_worker_logger, ReplayBuffer
 from agents import agent_classes
 
 
-class OffPolicyManager:
+def _save_buffer(exp_dir, curr_epoch, replay_buffer):
+    """ Replay buffer saving logic, which is the same for most managers. """
+    tstart = time.time()
+    save_dir = os.path.join(exp_dir, '{:04d}_replay_buffer'.format(curr_epoch))
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    replay_buffer.save_buffer(save_dir)
+    total_time = time.time() - tstart
+    print("\nSaved replay buffer at epoch {} (took {:.2f} seconds)\n".format(curr_epoch, total_time), flush=True)
+
+
+class BaseOffPolicyManager:
     def __init__(self, rank, config, settings):
         self.rank = rank
         self.config = config
@@ -29,6 +41,7 @@ class OffPolicyManager:
 
         self.model_path = os.path.join(self.exp_dir, 'model.pth.tar')
         self.optim_path = os.path.join(self.exp_dir, 'optim.pth.tar')
+        self.aux_optim_path = os.path.join(self.exp_dir, 'aux_optim.pth.tar')
 
         # Instantiate a copy of the model and place it on this worker's GPU
         agent_class = agent_classes(self.config['agent_type'], self.config['learner_type'], self.config['train_type'])
@@ -43,6 +56,13 @@ class OffPolicyManager:
         self.optim = Adam(self.agent_model.parameters(), lr=config['learning_rate'])
         if os.path.isfile(self.optim_path):
             self.optim.load_state_dict(torch.load(self.optim_path))
+
+        if self.agent_model.im is not None or self.agent_model.density is not None:
+            self.aux_optim = Adam(self.agent_model.get_aux_optim_params())
+            if os.path.isfile(self.aux_optim_path):
+                self.aux_optim.load_state_dict(torch.load(self.aux_optim_path))
+        else:
+            self.aux_optim = None
 
         # Initialize the buffer
         self.replay_buffer = ReplayBuffer(self.agent_model, self.config)
@@ -60,6 +80,10 @@ class OffPolicyManager:
         self.curr_epoch = 0
 
         self.eval_stats = {}
+
+    @property
+    def sample_type(self):
+        raise NotImplementedError
 
     @staticmethod
     def condense_loss(loss_):
@@ -87,11 +111,14 @@ class OffPolicyManager:
         else:
             return False
 
-
-    # Set up saving
     def checkpoint(self):
         self.agent_model.save_checkpoint(self.model_path)
         torch.save(self.optim, self.optim_path)
+        if self.aux_optim is not None:
+            torch.save(self.aux_optim, self.aux_optim_path)
+
+        if self.config.get('save_buffer', False) and self.curr_epoch % self.config.get('save_buffer_freq', 1) == 0:
+            _save_buffer(exp_dir=self.exp_dir, curr_epoch=self.curr_epoch, replay_buffer=self.replay_buffer)
 
         if self.settings.keep_checkpoints:
             checkpoint_path = os.path.join(self.exp_dir, '{:04d}_model.pth.tar'.format(self.curr_epoch))
@@ -115,9 +142,6 @@ class OffPolicyManager:
             ),
             flush=True
         )
-
-    def rollout_wrapper(self, c_ep_counter):
-        raise NotImplementedError
 
     def eval_wrapper(self):
         raise NotImplementedError
@@ -161,43 +185,42 @@ class OffPolicyManager:
             print(f_str.format(self.curr_epoch, *net_mean), flush=True)
 
     def do_cycle_rollouts(self):
-        cycle_ep_counter = torch.zeros(1)
+        raise NotImplementedError
 
-        for _ in range(self.config["rollouts_per_cycle"]):
-            # Run an episode! (wrapper handles logging and saving internally)
-            self.rollout_wrapper(cycle_ep_counter)
+    def do_update(self):
+        batch = self.replay_buffer.make_batch()
+        self.optim.zero_grad()
+        loss = self.condense_loss(self.agent_model(batch))
+        loss.backward()
+        for p in self.agent_model.parameters():
+            if p.grad is not None:
+                dist.all_reduce(p.grad.data)
+                p.grad.data /= dist.get_world_size()
+        self.optim.step()
 
-        dist.all_reduce(cycle_ep_counter)
-        self.agent_model.train_steps += cycle_ep_counter.item()
+    def do_aux_update(self):
+        if not hasattr(self, "aux_optim") or self.aux_optim is None:
+            return
+        # Prepare batch; all passes are done in inference (eval) mode
+        self.agent_model.eval()
+        batch = self.replay_buffer.make_batch()
+
+        # Update the model
+        self.agent_model.train()
+        self.aux_optim.zero_grad()
+        loss = self.condense_loss(self.agent_model.forward_aux(batch))
+        loss.backward()
+        for p in self.agent_model.parameters():
+            if p.grad is not None:
+                dist.all_reduce(p.grad.data)
+                p.grad.data /= dist.get_world_size()
+        self.aux_optim.step()
 
     def do_cycle_updates(self):
-        for v in self.agent_model.state_dict().values():
-            dist.broadcast(v.data, src=0)
-
-        if self.group_is_ready():
-            for _ in range(self.config["updates_per_cycle"]):
-
-                batch = self.replay_buffer.make_batch()
-                self.optim.zero_grad()
-                loss = self.condense_loss(self.agent_model(batch))
-                loss.backward()
-                for p in self.agent_model.parameters():
-                    if p.grad is not None:
-                        dist.all_reduce(p.grad.data)
-                        p.grad.data /= dist.get_world_size()
-                self.optim.step()
-
-            for v in self.agent_model.state_dict().values():
-                dist.broadcast(v.data, src=0)
+        raise NotImplementedError
 
     def do_cycle(self):
-        self.agent_model.eval()
-        self.do_cycle_rollouts()
-
-        self.agent_model.train()
-        self.do_cycle_updates()
-
-        self.agent_model.soft_update()
+        raise NotImplementedError
 
     def init_epoch(self):
         return
@@ -219,6 +242,100 @@ class OffPolicyManager:
 
         dist.barrier()
 
+        for gp in self.optim.param_groups:
+            gp['lr'] *= self.config.get("epoch_lr_decay", 1.0)
+
+        if self.aux_optim is not None:
+            for gp in self.aux_optim.param_groups:
+                gp['lr'] *= self.config.get("epoch_lr_decay", 1.0)
+
+
+class EpisodicOffPolicyManager(BaseOffPolicyManager):
+    @property
+    def sample_type(self):
+        return "Episodes"
+
+    def rollout_wrapper(self, c_ep_counter):
+        raise NotImplementedError
+
+    def do_cycle_rollouts(self):
+        cycle_ep_counter = torch.zeros(1)
+
+        for _ in range(self.config["rollouts_per_cycle"]):
+            # Run an episode! (wrapper handles logging and saving internally)
+            self.rollout_wrapper(cycle_ep_counter)
+
+        dist.all_reduce(cycle_ep_counter)
+        self.agent_model.train_steps += cycle_ep_counter.item()
+
+    def do_cycle_updates(self):
+        for v in self.agent_model.state_dict().values():
+            dist.broadcast(v.data, src=0)
+
+        if self.group_is_ready():
+            for _ in range(self.config["updates_per_cycle"]):
+                self.do_aux_update()
+            for _ in range(self.config["updates_per_cycle"]):
+                self.do_update()
+
+            for v in self.agent_model.state_dict().values():
+                dist.broadcast(v.data, src=0)
+
+    def do_cycle(self):
+        self.agent_model.eval()
+        self.do_cycle_rollouts()
+
+        self.agent_model.train()
+        self.do_cycle_updates()
+
+        self.agent_model.soft_update()
+
+
+class OffPolicyManager(BaseOffPolicyManager):
+    def __init__(self, rank, config, settings):
+        super().__init__(rank, config, settings)
+        self.agent_model.agent.reset()
+
+    @property
+    def sample_type(self):
+        return "Timesteps"
+
+    def env_transitions_wrapper(self, c_step_counter, num_transitions):
+        raise NotImplementedError
+
+    def do_cycle_rollouts(self):
+        cycle_step_counter = torch.zeros(1)
+
+        # Collect transitions (wrapper handles logging and saving internally)
+        self.env_transitions_wrapper(cycle_step_counter, self.config["env_steps_per_cycle"])
+
+        dist.all_reduce(cycle_step_counter)
+        self.agent_model.train_steps += cycle_step_counter.item()
+
+    def do_cycle_updates(self):
+        for v in self.agent_model.state_dict().values():
+            dist.broadcast(v.data, src=0)
+
+        if self.group_is_ready():
+            for _ in range(self.config["gradient_steps_per_cycle"]):
+                self.do_aux_update()
+            for _ in range(self.config["gradient_steps_per_cycle"]):
+                self.do_update()
+
+            for v in self.agent_model.state_dict().values():
+                dist.broadcast(v.data, src=0)
+
+            self.agent_model.soft_update()
+        else:
+            print("\nThe group is not ready. Skipping update...\n")
+
+    def do_cycle(self):
+        self.agent_model.eval()
+        self.do_cycle_rollouts()
+
+        self.agent_model.train()
+        self.do_cycle_updates()
+
 
 class OnPolicyManager:
     def __init__(self, rank, config, settings):
@@ -236,6 +353,7 @@ class OnPolicyManager:
 
         self.model_path = os.path.join(self.exp_dir, 'model.pth.tar')
         self.optim_path = os.path.join(self.exp_dir, 'optim.pth.tar')
+        self.aux_optim_path = os.path.join(self.exp_dir, 'aux_optim.pth.tar')
 
         # Instantiate a copy of the model and place it on this worker's GPU
         agent_class = agent_classes(self.config['agent_type'], self.config['learner_type'], self.config['train_type'])
@@ -250,6 +368,13 @@ class OnPolicyManager:
         self.optim = Adam(self.agent_model.parameters(), lr=config['learning_rate'])
         if os.path.isfile(self.optim_path):
             self.optim.load_state_dict(torch.load(self.optim_path))
+
+        if self.agent_model.im is not None or self.agent_model.density is not None:
+            self.aux_optim = Adam(self.agent_model.get_aux_optim_params())
+            if os.path.isfile(self.aux_optim_path):
+                self.aux_optim.load_state_dict(torch.load(self.aux_optim_path))
+        else:
+            self.aux_optim = None
 
         # Initialize trackers/counters
         self.time_keeper = {
@@ -279,11 +404,12 @@ class OnPolicyManager:
     def checkpoint(self):
         self.agent_model.save_checkpoint(self.model_path)
         torch.save(self.optim, self.optim_path)
+        if self.aux_optim is not None:
+            torch.save(self.aux_optim, self.aux_optim_path)
 
         if self.settings.keep_checkpoints:
             checkpoint_path = os.path.join(self.exp_dir, '{:04d}_model.pth.tar'.format(self.curr_epoch))
             self.agent_model.save_checkpoint(checkpoint_path)
-        # torch.save(self.optim.state_dict(), os.path.join(self.exp_dir, '{:04d}_optim.pth.tar'.format(self.curr_epoch)))
 
         n_episodes_played = int(self.agent_model.train_steps.data.item())
 
@@ -393,6 +519,24 @@ class PPOManager(OnPolicyManager):
         cycle_ep_counter = torch.zeros(1)
 
         self.rollout_wrapper(cycle_ep_counter)
+
+        if self.aux_optim is not None:
+            for u in range(self.config["update_epochs_per_rollout"]):
+                for mini_batch in self.agent_model.make_epoch_mini_batches(normalize_advantage=False):
+                    self.aux_optim.zero_grad()
+                    loss = self.agent_model.forward_aux(mini_batch)
+                    loss.backward()
+                    for p in self.agent_model.parameters():
+                        if p.grad is not None:
+                            dist.all_reduce(p.grad.data)
+                            p.grad.data /= dist.get_world_size()
+                    # _ = clip_grad_norm_(self.agent_model.parameters(), max_norm=0.5)
+                    self.aux_optim.step()
+            # We collect new data with reward coming from the updated density model. This is slower (but easier to
+            # implement) than relabeling previous samples. Note that we only count the rollouts used for updating the
+            # policy when reporting data efficiency.
+            cycle_ep_counter = torch.zeros(1)
+            self.rollout_wrapper(cycle_ep_counter)
 
         if self.config.get("norm_advantage", False):
             self.agent_model.distributed_advantage_normalization()

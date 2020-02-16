@@ -6,6 +6,7 @@
 from __future__ import division
 import time
 import numpy as np
+import torch.nn as nn
 from torch.nn.utils import clip_grad_norm
 from numpy.random import rand
 
@@ -191,5 +192,43 @@ def date_string():
     )
 
 
+def create_nn(input_size, output_size, hidden_size, num_layers, activation_fn=nn.ReLU, input_normalizer=None,
+              final_activation_fn=None, hidden_init_fn=None, b_init_value=None, last_fc_init_w=None):
+    # Optionally add a normalizer as the first layer
+    if input_normalizer is None:
+        input_normalizer = nn.Sequential()
+    layers = [input_normalizer]
 
+    # Create and initialize all layers except the last one
+    for layer_idx in range(num_layers - 1):
+        fc = nn.Linear(input_size if layer_idx == 0 else hidden_size, hidden_size)
+        if hidden_init_fn is not None:
+            hidden_init_fn(fc.weight)
+        if b_init_value is not None:
+            fc.bias.data.fill_(b_init_value)
+        layers += [fc, activation_fn()]
+
+    # Create and initialize  the last layer
+    last_fc = nn.Linear(hidden_size, output_size)
+    if last_fc_init_w is not None:
+        last_fc.weight.data.uniform_(-last_fc_init_w, last_fc_init_w)
+        last_fc.bias.data.uniform_(-last_fc_init_w, last_fc_init_w)
+    layers += [last_fc]
+
+    # Optionally add a final activation function
+    if final_activation_fn is not None:
+        layers += [final_activation_fn()]
+    return nn.Sequential(*layers)
+
+
+def fanin_init(tensor):
+    size = tensor.size()
+    if len(size) == 2:
+        fan_in = size[0]
+    elif len(size) > 2:
+        fan_in = np.prod(size[1:])
+    else:
+        raise Exception("Shape must be have dimension at least 2.")
+    bound = 1. / np.sqrt(fan_in)
+    return tensor.data.uniform_(-bound, bound)
 

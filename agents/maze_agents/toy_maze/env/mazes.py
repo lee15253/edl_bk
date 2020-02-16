@@ -105,7 +105,8 @@ class CircleMaze:
 
 
 class Maze:
-    def __init__(self, *segment_dicts, goal_squares=None, start_squares=None):
+    def __init__(self, *segment_dicts, goal_squares=None, start_squares=None,
+                 min_wall_coord=None, walls_to_add=(), walls_to_remove=()):
         self._segments = {'origin': {'loc': (0.0, 0.0), 'connect': set()}}
         self._locs = set()
         self._locs.add(self._segments['origin']['loc'])
@@ -114,6 +115,11 @@ class Maze:
             self._walls.add(self._wall_line(self._segments['origin']['loc'], direction))
         self._last_segment = 'origin'
         self.goal_squares = None
+
+        # These allow to implement more complex mazes
+        self.min_wall_coord = min_wall_coord
+        self.walls_to_add = walls_to_add
+        self.walls_to_remove = walls_to_remove
 
         if goal_squares is None:
             self._goal_squares = None
@@ -211,11 +217,35 @@ class Maze:
         self._last_segment = name
 
     def _finalize(self):
+        bottom_wall_coord = min([min(w[0]) for w in self._walls]) + 0.5
+        left_wall_coord = min([min(w[1]) for w in self._walls]) + 0.5
+
+        def _rm_wall(wall):
+            coords = wall[0] + wall[1]
+            # Check if this is the bottom wall
+            if wall[0][0] < bottom_wall_coord and wall[0][1] < bottom_wall_coord:
+                return False
+            # Check if this is the left wall
+            if wall[1][0] < left_wall_coord and wall[1][1] < left_wall_coord:
+                return False
+            # Remove walls in the bottom-left corner
+            return all(c < self.min_wall_coord for c in coords)
+
+        if self.min_wall_coord is not None:
+            self._walls = set([w for w in self._walls if not _rm_wall(w)])
+
+        for wall in self.walls_to_remove:
+            if wall in self._walls:
+                self._walls.remove(wall)
+
         for segment in self._segments.values():
             for c_dir in list(segment['connect']):
                 wall = self._wall_line(segment['loc'], c_dir)
                 if wall in self._walls:
                     self._walls.remove(wall)
+
+        for wall in self.walls_to_add:
+            self._walls.add(wall)
 
         if self._goal_squares is None:
             self.goal_squares = [self._last_segment]
@@ -230,6 +260,14 @@ class Maze:
             _, ax = plt.subplots(1, 1, figsize=(5, 4))
         for x, y in self._walls:
             ax.plot(x, y, 'k-')
+
+    def sample(self):
+        segment_keys = list(self._segments.keys())
+        square_id = segment_keys[np.random.randint(low=0, high=len(segment_keys))]
+        square_loc = self._segments[square_id]['loc']
+        shift = np.random.uniform(low=-0.5, high=0.5, size=(2,))
+        loc = square_loc + shift
+        return loc[0], loc[1]
 
     def sample_start(self):
         min_wall_dist = 0.05
@@ -589,3 +627,99 @@ segments_crazy = [
      {'anchor': '9,9', 'direction': 'down', 'name': '9,8'}
 ]
 mazes_dict['square_large'] = {'maze': Maze(*segments_crazy, goal_squares='9,9'), 'action_range': 0.95}
+
+
+segments_tree = [
+    dict(name='A', anchor='origin', direction='down', times=2),
+    dict(name='BR', anchor='A1', direction='right', times=4),
+    dict(name='BL', anchor='A1', direction='left', times=4),
+    dict(name='CR', anchor='BR3', direction='down', times=2),
+    dict(name='CL', anchor='BL3', direction='down', times=2),
+    dict(name='DLL', anchor='CL1', direction='left', times=2),
+    dict(name='DLR', anchor='CL1', direction='right', times=2),
+    dict(name='DRL', anchor='CR1', direction='left', times=2),
+    dict(name='DRR', anchor='CR1', direction='right', times=2),
+    dict(name='ELL', anchor='DLL1', direction='down', times=2),
+    dict(name='ELR', anchor='DLR1', direction='down', times=2),
+    dict(name='ERL', anchor='DRL1', direction='down', times=2),
+    dict(name='ERR', anchor='DRR1', direction='down', times=2),
+]
+mazes_dict['square_tree'] = {'maze': Maze(*segments_tree, goal_squares=['ELL1', 'ERR1']), 'action_range': 0.95}
+
+
+segments_corridor = [
+    dict(name='A', anchor='origin', direction='left', times=5),
+    dict(name='B', anchor='origin', direction='right', times=5)
+]
+mazes_dict['square_corridor'] = {'maze': Maze(*segments_corridor, goal_squares=['b4']), 'action_range': 0.95}
+mazes_dict['square_corridor2'] = {'maze': Maze(*segments_corridor, goal_squares=['b4'], start_squares=['a4']),
+                                  'action_range': 0.95}
+
+
+_walls_to_remove = [
+    ((4.5, 4.5), (7.5, 8.5)),
+    ((-0.5, 0.5), (5.5, 5.5)),
+    ((2.5, 2.5), (4.5, 5.5)),
+    ((3.5, 4.5), (3.5, 3.5)),
+    ((4.5, 4.5), (2.5, 3.5)),
+    ((4.5, 5.5), (2.5, 2.5)),
+    ((3.5, 4.5), (0.5, 0.5)),
+    ((4.5, 5.5), (4.5, 4.5)),
+    ((5.5, 5.5), (0.5, 1.5)),
+    ((8.5, 8.5), (-0.5, 0.5)),
+    ((6.5, 7.5), (2.5, 2.5)),
+    ((7.5, 7.5), (6.5, 7.5)),
+    ((7.5, 8.5), (7.5, 7.5)),
+    ((8.5, 8.5), (7.5, 8.5)),
+    ((7.5, 7.5), (2.5, 3.5)),
+    ((8.5, 9.5), (7.5, 7.5)),
+    ((7.5, 8.5), (4.5, 4.5)),
+    ((8.5, 8.5), (4.5, 5.5)),
+    ((5.5, 6.5), (7.5, 7.5)),
+    ((3.5, 4.5), (7.5, 7.5)),
+    ((4.5, 4.5), (6.5, 7.5)),
+    ((4.5, 4.5), (5.5, 6.5)),
+    ((3.5, 3.5), (5.5, 6.5)),
+    ((5.5, 5.5), (5.5, 6.5)),
+    ((3.5, 4.5), (6.5, 6.5)),
+    ((4.5, 5.5), (6.5, 6.5)),
+    ((1.5, 1.5), (7.5, 8.5)),
+    ((2.5, 2.5), (5.5, 6.5)),
+    ((0.5, 0.5), (4.5, 5.5)),
+    ((1.5, 1.5), (5.5, 6.5)),
+    ((4.5, 4.5), (4.5, 5.5)),
+    ((5.5, 5.5), (1.5, 2.5)),
+    ((5.5, 5.5), (2.5, 3.5)),
+    ((5.5, 5.5), (3.5, 4.5)),
+    ((6.5, 7.5), (8.5, 8.5)),
+    ((7.5, 7.5), (8.5, 9.5)),
+    ((0.5, 0.5), (8.5, 9.5)),
+    ((0.5, 1.5), (8.5, 8.5)),
+    ((-0.5, 0.5), (7.5, 7.5)),
+    ((0.5, 1.5), (6.5, 6.5)),
+    ((0.5, 0.5), (6.5, 7.5)),
+    ((2.5, 2.5), (6.5, 7.5)),
+    ((2.5, 2.5), (7.5, 8.5)),
+    ((2.5, 3.5), (8.5, 8.5)),
+    ((3.5, 4.5), (8.5, 8.5)),
+    ((4.5, 5.5), (8.5, 8.5)),
+    ((5.5, 6.5), (8.5, 8.5)),
+    ((7.5, 8.5), (5.5, 5.5)),
+    ((8.5, 9.5), (6.5, 6.5)),
+    ((8.5, 8.5), (5.5, 6.5)),
+    ((7.5, 8.5), (3.5, 3.5)),
+    ((8.5, 9.5), (2.5, 2.5)),
+    ((8.5, 8.5), (2.5, 3.5)),
+]
+_walls_to_add = [
+    ((-0.5, 0.5), (4.5, 4.5)),
+    ((0.5, 1.5), (4.5, 4.5)),
+    ((2.5, 3.5), (4.5, 4.5)),
+    ((4.5, 4.5), (3.5, 4.5)),
+    ((4.5, 4.5), (2.5, 3.5)),
+    ((4.5, 4.5), (1.5, 2.5)),
+    ((6.5, 6.5), (8.5, 9.5)),
+]
+mazes_dict['square_bottleneck'] = {'maze': Maze(*segments_crazy, goal_squares='9,9', min_wall_coord=4,
+                                                walls_to_remove=_walls_to_remove, walls_to_add=_walls_to_add),
+                                   'action_range': 0.95}
