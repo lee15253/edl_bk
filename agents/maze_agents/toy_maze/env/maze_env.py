@@ -6,13 +6,13 @@
 import torch
 import numpy as np
 from agents.maze_agents.toy_maze.env.mazes import mazes_dict, make_crazy_maze, make_experiment_maze, make_hallway_maze, make_u_maze
-
+import ipdb
 
 class Env:
     def __init__(self, n=None, maze_type=None, use_antigoal=True, ddiff=False, ignore_reset_start=False,
                  done_on_success=True):
         self.n = n
-
+        
         self._mazes = mazes_dict
         self.maze_type = maze_type.lower()
 
@@ -75,7 +75,8 @@ class Env:
         if isinstance(x, (tuple, list)):
             return x[0], x[1]
         if isinstance(x, torch.Tensor):
-            x = x.data.numpy()
+            # TODO: cuda 쓰느라 cpu()
+            x = x.data.cpu().numpy()
         return float(x[0]), float(x[1])
 
     @staticmethod

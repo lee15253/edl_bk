@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
 
+import ipdb
 import torch
 import numpy as np
 import torch.distributed as dist
@@ -116,8 +117,10 @@ def ppo_decorator(partial_agent_class):
             dist.all_reduce(a_sumsq)
 
             n = a.shape[0] * torch.ones(1)
+            n = n.to('cuda')
             dist.all_reduce(n)
             # n = dist.get_world_size() * self.horizon
+
 
             a_mean = a_sum / n
             a_var = (a_sumsq / n) - (a_mean ** 2)
@@ -171,6 +174,8 @@ def ppo_decorator(partial_agent_class):
                 advs[t] = delta + self.gamma * self.gae_lambda * has_next * last_adv
                 last_adv = advs[t]
 
+            advs = advs.to('cuda')
+
             batched_episode['advantage'] = advs.detach()
             batched_episode['cumulative_return'] = advs.detach() + batched_episode['value'].detach()
 
@@ -213,14 +218,22 @@ def ppo_decorator(partial_agent_class):
             if mini_batch is None:
                 # We're here to get the stats
                 mini_batch = self._batched_ep
+                res = {}
+                for k,v in mini_batch.items():
+                    res[k] = v.to('cuda')
+                mini_batch = res
                 fill_summary = True
             else:
                 # We're here to compute the
                 fill_summary = False
                 self.train()
 
+            # TODO: cuda 쓰기 위해
+            self.to('cuda')
+
             value = self.get_values(mini_batch)
             assert value.shape == mini_batch['cumulative_return'].shape
+    
             v_losses = 0.5 * torch.pow(mini_batch['cumulative_return'] - value, 2)
             v_loss = v_losses.mean()
 
@@ -242,7 +255,6 @@ def ppo_decorator(partial_agent_class):
                 self.fill_summary(mini_batch['reward'].mean(), value.mean(), v_loss, p_loss, e_loss)
 
             self.eval()
-
             return loss
 
     return NewClass

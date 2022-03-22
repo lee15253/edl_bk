@@ -152,10 +152,12 @@ def sac_decorator(partial_agent_class):
             v = self.get_values(mini_batch)
 
             # Loss for the v module
+            v_targ = v_targ.to('cuda')
             v_loss = torch.pow(v - v_targ.detach(), 2).mean()
 
             # Bootstrap from early terminal means bootstrap from terminal value when episode didn't complete
             if self.bootstrap_from_early_terminal:
+                mini_batch['complete'] = mini_batch['complete'].to('cuda')
                 q_targ = mini_batch['reward'] + ((1 - mini_batch['complete']) * self.gamma * v_next)
             else:
                 q_targ = mini_batch['reward'] + ((1 - mini_batch['terminal']) * self.gamma * v_next)
@@ -166,6 +168,9 @@ def sac_decorator(partial_agent_class):
             q2 = self.get_action_qs(mini_batch, q_i=2)
 
             # Loss for the q modules (the target is the same for both)
+            q1 = q1.to('cuda')
+            q2 = q2.to('cuda')
+            q_targ = q_targ.to('cuda')
             q1_loss = torch.pow(q1 - q_targ.detach(), 2).mean()
             q2_loss = torch.pow(q2 - q_targ.detach(), 2).mean()
 

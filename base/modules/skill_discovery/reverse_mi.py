@@ -32,6 +32,8 @@ class Discriminator(nn.Module, IntrinsicMotivationModule):
 
     def log_approx_posterior(self, batch):
         x = batch[self.input_key]
+        x = x.to('cuda')
+        self.layers = self.layers.to('cuda')
         for layer in self.layers:
             x = layer(x)
         p = self.softmax(x)
@@ -46,6 +48,9 @@ class Discriminator(nn.Module, IntrinsicMotivationModule):
 
     def forward(self, batch):
         x = batch[self.input_key]
+        self.layers = self.layers.to('cuda')
+        x = x.to('cuda')
         for layer in self.layers:
             x = layer(x)
+        batch['skill'] = batch['skill'].to('cuda')
         return self.loss(x, batch['skill']).mean()

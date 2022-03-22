@@ -244,6 +244,7 @@ class BaseLearner(nn.Module):
         self._add_im_reward()
 
     def _add_im_reward(self):
+        print("여기...?")
         if self.im is not None:
             for ep in self._compress_me:
                 batched_episode = {key: torch.stack([e[key] for e in ep]) for key in ep[0].keys()}
@@ -294,6 +295,7 @@ class BaseLearner(nn.Module):
             loss += (self.im_lambda * self.get_im_loss(mini_batch))
 
         if self.density is not None:
+            loss = loss.to('cuda')
             loss += (self.density_lambda * self.get_density_loss(mini_batch))
 
         self.eval()

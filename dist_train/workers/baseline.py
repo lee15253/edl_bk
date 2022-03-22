@@ -60,7 +60,7 @@ class EpisodicOffPolicy(EpisodicOffPolicyManager):
 
             dump_ep = []
             for t in self.agent_model.curr_ep:
-                dump_t = {k: np.array(v.detach()).tolist() for k, v in t.items()}
+                dump_t = {k: np.array(v.cpu().detach()).tolist() for k, v in t.items()}
                 dump_ep.append(dump_t)
             episodes[evi] = dump_ep
 
@@ -156,7 +156,7 @@ class OnPolicy(OnPolicyManager):
             c_path = os.path.join(exp_dir, dstr + '.json')
             dump_ep = []
             for t in self.agent_model.curr_ep:
-                dump_t = {k: np.array(v.detach()).tolist() for k, v in t.items()}
+                dump_t = {k: np.array(v.cpu().detach()).tolist() for k, v in t.items()}
                 dump_ep.append(dump_t)
             with open(c_path, 'wt') as f:
                 json.dump(dump_ep, f)
@@ -192,7 +192,7 @@ class OnPolicy(OnPolicyManager):
 
             dump_ep = []
             for t in self.agent_model.curr_ep:
-                dump_t = {k: np.array(v.detach()).tolist() for k, v in t.items()}
+                dump_t = {k: np.array(v.cpu().detach()).tolist() for k, v in t.items()}
                 dump_ep.append(dump_t)
             episodes[evi] = dump_ep
 

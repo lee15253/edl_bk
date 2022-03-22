@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
 
+import ipdb
 import os
 import json
 import time
@@ -357,6 +358,7 @@ class OnPolicyManager:
 
         # Instantiate a copy of the model and place it on this worker's GPU
         agent_class = agent_classes(self.config['agent_type'], self.config['learner_type'], self.config['train_type'])
+
         self.agent_model = agent_class(**self.config['agent_params'])
 
         if os.path.isfile(self.model_path):
@@ -541,10 +543,18 @@ class PPOManager(OnPolicyManager):
         if self.config.get("norm_advantage", False):
             self.agent_model.distributed_advantage_normalization()
 
+        # TODO: cuda 사용위해
+
         for u in range(self.config["update_epochs_per_rollout"]):
             for mini_batch in self.agent_model.make_epoch_mini_batches(normalize_advantage=False):
                 self.optim.zero_grad()
-                loss = self.agent_model(mini_batch)
+
+                # TODO: cuda 사용위해
+                res = {}
+                for k,v in mini_batch.items():
+                    res[k] = v.to('cuda')
+                
+                loss = self.agent_model(res)
                 loss.backward()
                 for p in self.agent_model.parameters():
                     if p.grad is not None:

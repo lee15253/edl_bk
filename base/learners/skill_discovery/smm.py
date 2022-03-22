@@ -62,6 +62,7 @@ class BaseSMMLearner(BaseSkillDiscoveryLearner):
                     novelty = novelty / torch.sqrt(self._density_bn.running_var[0])
 
                 for e, s in zip(ep, novelty):
+                    e['reward'] = e['reward'].to('cuda')
                     e['reward'] += (self.density_nu * s.detach())
                     e['density_model_reward'] = s.detach()
 

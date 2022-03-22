@@ -1,6 +1,6 @@
 import math
 import matplotlib.pyplot as plt
-
+import ipdb
 
 def plot_stats_by_name(exp, stat_list, labels=None, ncols=4, figsize=(5, 3), titlesize=12):
     assert len(stat_list) > 0

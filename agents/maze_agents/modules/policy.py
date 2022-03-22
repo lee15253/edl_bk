@@ -32,6 +32,7 @@ class Policy(nn.Module):
 
     def forward(self, s, g):
         """Produce an action"""
+
         return torch.tanh(self.layers(torch.cat([s, g], dim=1)) * 0.005) * self.a_range
 
 
@@ -55,6 +56,9 @@ class StochasticPolicy(nn.Module):
                                 final_activation_fn=nn.Softplus)
 
     def action_stats(self, s, g):
+        s = s.to('cuda')
+        g = g.to('cuda')
+        self.layers.to('cuda')
         x = torch.cat([s, g], dim=1) if g is not None else s
         action_stats = self.layers(x) + 1.05 #+ 1e-6
         return action_stats[:, :self.action_size], action_stats[:, self.action_size:]
@@ -120,9 +124,11 @@ class ReparamTrickPolicy(nn.Module):
         self.layers = create_nn(input_size=input_size, output_size=self.action_size * 2, hidden_size=hidden_size,
                                 num_layers=self.num_layers, input_normalizer=input_normalizer,
                                 hidden_init_fn=hidden_init_fn, b_init_value=b_init_value, last_fc_init_w=last_fc_init_w)
+        self.layers.to('cuda')
 
     def action_stats(self, s, g):
         x = torch.cat([s, g], dim=1) if g is not None else s
+        x = x.to('cuda')
         action_stats = self.layers(x)
         mean = action_stats[:, :self.action_size]
         log_std = action_stats[:, self.action_size:]

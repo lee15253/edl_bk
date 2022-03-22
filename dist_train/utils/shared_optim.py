@@ -2,6 +2,7 @@ from __future__ import division
 import math
 import torch
 import torch.optim as optim
+import ipdb
 from collections import defaultdict
 
 
@@ -151,7 +152,12 @@ class SharedAdam(optim.Optimizer):
                     )
                 amsgrad = group['amsgrad']
 
+
                 state = self.state[p]
+                res = {}
+                for k,v in state.items():
+                    res[k] = v.to('cuda')
+                state = res
 
                 exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
                 if amsgrad:
@@ -164,6 +170,7 @@ class SharedAdam(optim.Optimizer):
                     grad = grad.add(group['weight_decay'], p.data)
 
                 # Decay the first and second moment running average coefficient
+                grad = grad.to('cuda') 
                 exp_avg.mul_(beta1).add_(1 - beta1, grad)
                 exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
 
@@ -180,7 +187,9 @@ class SharedAdam(optim.Optimizer):
                 bias_correction2 = 1 - beta2**(state['step'][0])#state['step'].item()
                 step_size = group['lr'] * \
                     math.sqrt(bias_correction2) / bias_correction1
-
+                
+                
+                p.data = p.data.to('cuda')
                 p.data.addcdiv_(-step_size.item(), exp_avg, denom)
 
         return loss

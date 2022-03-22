@@ -12,6 +12,7 @@ from agents.maze_agents.toy_maze.env import Env
 from base.modules.normalization import DatasetNormalizer
 from agents.maze_agents.modules.density import VQVAEDensity
 from agents.maze_agents.modules import StochasticPolicy, Value
+import ipdb
 from base.learners.skill_discovery.edl import BaseEDLLearner, BaseEDLSiblingRivalryLearner
 
 
@@ -30,12 +31,16 @@ class DistanceStochasticAgent(StochasticAgent):
 
     def reset(self, skill=None, *args, **kwargs):
         self.reset_skill(skill)
-        kwargs['goal'] = self.vae.get_centroids(dict(skill=self.curr_skill.view([]))).detach().numpy()
+        # TODO: cuda로 바꿔서 중간에 cpu()넣어줌
+        kwargs['goal'] = self.vae.get_centroids(dict(skill=self.curr_skill.view([]))).cpu().detach().numpy()
         self.env.reset(*args, **kwargs)
         self.episode = []
 
     def preprocess_skill(self, curr_skill):
         assert curr_skill is not None
+        # TODO: cuda 하려고
+        self.skill_embedding.weight = nn.Parameter(self.skill_embedding.weight.to('cuda'))
+        curr_skill = curr_skill.view(-1).to('cuda')
         return self.skill_embedding(curr_skill).detach()
 
 
@@ -160,6 +165,7 @@ class EDLSiblingRivalryLearner(BaseEDLSiblingRivalryLearner, EDLLearner):
                                              skill_embedding=self.vae.vq.embedding, vae=self.vae)
 
     def get_values(self, batch):
+        self.v_module.to('cuda')
         return self.v_module(
             batch['state'],
             self.preprocess_skill(batch['skill']),

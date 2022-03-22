@@ -46,9 +46,20 @@ class Critic(nn.Module):
 
     def forward(self, s, a, g, ag=None):
         """Produce an action"""
+        s.to('cuda')
+        a.to('cuda')
+        g.to('cuda')
+        if ag is not None:
+            ag.to('cuda')
         if self.use_antigoal:
             return self.layers(torch.cat([s, a, g, ag], dim=1)).view(-1)
         else:
+            s = s.to('cuda')
+            a = a.to('cuda')
+            g = g.to('cuda')
+            
+            self.layers = self.layers.to('cuda')
+            
             return self.layers(torch.cat([s, a, g], dim=1)).view(-1)
 
 
@@ -77,7 +88,11 @@ class Value(nn.Module):
                                 hidden_init_fn=hidden_init_fn, b_init_value=b_init_value, last_fc_init_w=last_fc_init_w)
 
     def forward(self, s, g, ag=None):
+        self.layers.to('cuda')
+        s = s.to('cuda')
+        g = g.to('cuda')
         if self.use_antigoal:
+            ag = ag.to('cuda')
             return self.layers(torch.cat([s, g, ag], dim=1)).view(-1)
         else:
             return self.layers(torch.cat([s, g], dim=1)).view(-1)

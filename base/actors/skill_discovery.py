@@ -61,6 +61,7 @@ class BaseSkillDiscoveryAgent(BaseActor):
         r = torch.zeros(1)
         env_rew = self.env.reward * torch.ones(1)
         discriminator_rew = torch.zeros(1)
+        # print(discriminator_rew)
 
         self.episode.append({
             'state': s,

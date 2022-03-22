@@ -81,7 +81,9 @@ class BaseSkillDiscoveryLearner(BaseLearner):
                     surprisals = surprisals / torch.sqrt(self._im_bn.running_var[0])
 
                 for e, s in zip(ep, surprisals):
+                    e['reward'] = e['reward'].to('cuda')
                     e['reward'] += (self.im_nu * s.detach())
+                    print("여기지나가나1?")
                     e['im_reward'] = s.detach()
 
     def preprocess_skill(self, z, **kwargs):
@@ -108,6 +110,7 @@ class BaseSkillDiscoveryLearner(BaseLearner):
         return log_prob.sum(dim=1), n_ent
 
     def get_im_loss(self, batch):
+        self.im = self.im.to('cuda')
         return self.im(batch)
 
     def soft_update(self):

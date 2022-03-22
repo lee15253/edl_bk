@@ -723,3 +723,7 @@ _walls_to_add = [
 mazes_dict['square_bottleneck'] = {'maze': Maze(*segments_crazy, goal_squares='9,9', min_wall_coord=4,
                                                 walls_to_remove=_walls_to_remove, walls_to_add=_walls_to_add),
                                    'action_range': 0.95}
+
+mazes_dict['upside'] = {'maze': Maze(*segments_crazy, goal_squares='9,9', min_wall_coord=4,
+                                                walls_to_remove=_walls_to_remove, walls_to_add=_walls_to_add),
+                                   'action_range': 0.19}

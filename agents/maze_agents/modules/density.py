@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
 
+import ipdb
 import torch
 import torch.nn as nn
 from torch.distributions import Beta
@@ -36,6 +37,9 @@ class BaseVAEDensity(nn.Module, DensityModule):
 
         self.decoder = create_nn(input_size=self.code_size, output_size=self.input_size,
                                  hidden_size=hidden_size, num_layers=self.num_layers)
+
+        self.encoder.to('cuda')
+        self.decoder.to('cuda')
 
         self.mse_loss = nn.MSELoss(reduction='none')
 
@@ -80,6 +84,7 @@ class VAEDensity(BaseVAEDensity):
 
         self.beta = float(beta)
         self.loss_mult = float(loss_mult)
+        self.encoder.to('cuda')
 
     def _make_normalizer_module(self):
         self.normalizer = Normalizer(self.state_size, extra_dims=self.num_skills) if self.normalize_inputs else None
@@ -91,6 +96,8 @@ class VAEDensity(BaseVAEDensity):
     def compute_logprob(self, batch, sample=True, with_moments=False, sum_logprob=True):
         s, z = batch[self.input_key], self.skill_preprocessing_fn(batch['skill'])
         x = torch.cat([s, z], dim=1)
+        x= x.to('cuda')
+        
         mu_and_logvar = self.encoder(x)
         mu, logvar = mu_and_logvar[:, :self.code_size], mu_and_logvar[:, self.code_size:]
         std = (0.5 * logvar).exp()
@@ -166,8 +173,11 @@ class VQVAEDensity(BaseVAEDensity):
 
     def get_centroids(self, batch):
         z_idx = batch['skill']
-        z_q_x = torch.index_select(self.vq.embedding.weight.detach(), dim=0, index=z_idx)
+        z_idx = z_idx.to(self.vq.embedding.weight.device)
+        z_q_x = torch.index_select(self.vq.embedding.weight.detach(), dim=0, index=z_idx).to('cuda')
+        
         centroids = self.decoder(z_q_x)
+
         if self.normalizes_inputs:
             centroids = self.normalizer.denormalize(centroids)
         return centroids

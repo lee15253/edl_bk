@@ -7,6 +7,7 @@ import os
 import sys
 import math
 import json
+import ipdb
 import torch
 import shutil
 import argparse
@@ -78,10 +79,12 @@ if __name__ == '__main__':
     indices = list(range(dataset.size(0)))
     loss_list = []
     model.train()
+    model.to('cuda')
     for iter_idx in tqdm(range(args.dur), desc="Training"):
         # Make batch
         batch_indices = np.random.choice(indices, size=config['batch_size'])
         batch = dict(next_state=dataset[batch_indices])
+        batch['next_state'] = batch['next_state'].to('cuda')
 
         # Forward + backward pass
         optim.zero_grad()
